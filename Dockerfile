@@ -7,7 +7,7 @@ COPY requirements.txt .
 
 RUN pip install -r requirements.txt
 
-VOLUME /app/settings
+VOLUME /app/config
 
 CMD [ "main.py" ]
 
