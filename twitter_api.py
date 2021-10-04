@@ -2,8 +2,6 @@ import threading
 from typing import Dict, Generator
 import twitter
 import json
-from twitter.api import Api
-
 from twitter.models import User
 from redis_api import send_live_room_status
 
