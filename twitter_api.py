@@ -2,7 +2,10 @@ import threading
 from typing import Dict, Generator
 import twitter
 import json
+from twitter.error import TwitterError
 from twitter.models import User
+from redis import Redis
+from twitter.ratelimit import EndpointRateLimit, RateLimit
 from redis_api import send_live_room_status
 
 
@@ -10,9 +13,42 @@ from redis_api import send_live_room_status
 def init_api():
     f = open('./config/config.json')
     config = json.load(f)
-    return twitter.Api(**config['api'])
+    return twitter.Api(**config['api'], sleep_on_rate_limit=True)
 
 api = init_api()
+
+
+class TwitterSpiders:
+
+    REDIS: Redis = None
+
+    def __init__(self, redis: Redis):
+        self.redis = redis
+        self.stream = None
+        self.listening = []
+        self.should_refresh = False
+
+    def add_listen(self, user: str):
+        self.listening.append(user)
+        self.refresh_stream()
+
+    def remove_listen(self, user: str):
+        self.listening.remove(user)
+        self.refresh_stream()
+
+    def refresh_stream(self):
+        self.stream.close()
+        thread = threading.Thread(target=self.launch_stream)
+        thread.start()
+
+    def launch_stream(self):
+        for data in api.GetStreamFilter(follow=self.listening):
+            try:
+                print(f'檢測到 {data["user"]["name"]} 有新動態，已成功發佈。')
+                TwitterSpiders.REDIS.publish(f'twitter:{data["user"]["screen_name"]}', json.dumps(data))
+            except TwitterError as e:
+                print(f'追蹤推特用戶推文時出現錯誤: {e.message}')
+            
 
 
 class TwitterSpider:
@@ -23,6 +59,8 @@ class TwitterSpider:
         self.user = user
         self.screen = username
         self.closed = True
+        limit: RateLimit = api.rate_limit
+        print(f'stream limit: {limit.get_limit(api.base_url+"/statuses/filter.json")._asdict}')
 
 
     def listen(self, stream: Generator[any, None, None]):

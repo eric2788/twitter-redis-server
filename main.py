@@ -67,7 +67,7 @@ async def launch_server():
                 if to_listen in started:
                     continue
 
-                thread = threading.Thread(target=run_thread, args=(username, ))
+                thread = threading.Thread(target=run_thread, args=(to_listen, ))
                 thread.start()
                 started.add(to_listen)
 
