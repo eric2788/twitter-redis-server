@@ -6,7 +6,7 @@ from redis.exceptions import RedisError
 from typing import Dict
 
 
-VERSION = 'v0.1'
+VERSION = 'v0.2'
 
 started = set()
 excepted = set()
@@ -19,7 +19,7 @@ async def launch_server():
     print(f'twitter-redis-server {VERSION} 成功啟動，正在監聽指令...')
     try:
         while True:
-            time.sleep(1)
+            time.sleep(10)
             channels = redis.pubsub_channels('twitter:*')
             subscribing = set()
 
@@ -42,6 +42,7 @@ async def launch_server():
                 started.discard(to_stop)
 
             if listening.symmetric_difference(started):
+                listening = started
                 await spiders.refresh_stream(started)
     except RedisError as e:
         print(f'連接到 Redis 時出現錯誤: {e}')

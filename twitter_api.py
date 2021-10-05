@@ -1,8 +1,10 @@
 import asyncio
+from json.decoder import JSONDecodeError
 from typing import Dict
 import json
 from redis import Redis
 from tweepy.errors import TweepyException
+from tweepy.models import Status
 from redis_api import send_live_room_status
 import tweepy
 
@@ -57,10 +59,15 @@ class TwitterSpiders:
         stream.set_data_handler(self.on_data)
 
     async def refresh_stream(self, listening=[]):
+        print(f'正在刷新串流...')
         await self.close_stream()
+        if not listening: # 空值
+            return
         followers = []
         for username in listening:
             user = await user_lookup(username)
+            if user == None:
+                continue
             followers.append(str(user.id))
             print(f'即將監控 {user.name} 的推文')
         try:
@@ -73,11 +80,14 @@ class TwitterSpiders:
             print(f'追蹤推特用戶推文時出現錯誤: {e.message}')
 
     def on_data(self, raw_data):
-        data = json.loads(raw_data.decode('utf-8'))
-        if 'delete' in data:
-            return # skip delete post 
-        print(f'檢測到 {data["user"]["name"]} 有新動態，已成功發佈。')
-        self.redis.publish(f'twitter:{data["user"]["screen_name"]}', json.dumps(data))
+        try:
+            data = json.loads(raw_data.decode('utf-8'))
+            if 'delete' in data:
+                return # skip delete post 
+            print(f'檢測到 {data["user"]["name"]} 有新動態，已成功發佈。')
+            self.redis.publish(f'twitter:{data["user"]["screen_name"]}', json.dumps(data))
+        except {Exception, ValueError} as e:
+            print(f'檢測推文時出現錯誤: {e}')
 
     async def close_stream(self):
         if not self.thread:
@@ -97,5 +107,8 @@ async def user_lookup(screen_name: str):
     if screen_name in user_caches:
         return user_caches[screen_name]
     [data, include, error, meta] = api.get_user(username=screen_name)
+    if error:
+        print(f'請求用戶 {screen_name} 時出現錯誤: {error}')
+        return None
     user_caches[screen_name] = data
     return data
