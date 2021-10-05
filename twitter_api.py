@@ -1,99 +1,101 @@
-import threading
-from typing import Dict, Generator
-import twitter
+import asyncio
+from typing import Dict
 import json
-from twitter.error import TwitterError
-from twitter.models import User
 from redis import Redis
-from twitter.ratelimit import EndpointRateLimit, RateLimit
+from tweepy.errors import TweepyException
 from redis_api import send_live_room_status
+import tweepy
 
+class TweetStream(tweepy.Stream):
+    
+    def on_connect(self):
+        self.closed=False
+        print(f'推特串流成功啟動。')
 
+    def set_data_handler(self, func):
+        self.func = func
+
+    def on_closed(self, response):
+        print(f'推特串流已關閉: {response}')
+        self.closed=True
+
+    async def wait_until_closed(self):
+        while not self.closed:
+            await asyncio.sleep(1)
+        
+    def on_connection_error(self):
+        print(f'連接錯誤')
+
+    def on_data(self, raw_data):
+        if not self.func:
+            return
+        self.func(raw_data)
 
 def init_api():
     f = open('./config/config.json')
     config = json.load(f)
-    return twitter.Api(**config['api'], sleep_on_rate_limit=True)
+    return tweepy.Client(**config['api'], wait_on_rate_limit=True)
+
+def init_stream():
+    f = open('./config/config.json')
+    config = json.load(f)
+    auth = config['api']
+    del auth['bearer_token']
+    return TweetStream(**auth, daemon=True)
 
 api = init_api()
+stream = init_stream()
 
 
 class TwitterSpiders:
 
-    REDIS: Redis = None
-
     def __init__(self, redis: Redis):
         self.redis = redis
+        self.thread = None
         self.stream = None
         self.listening = []
-        self.should_refresh = False
+        stream.set_data_handler(self.on_data)
 
-    def add_listen(self, user: str):
-        self.listening.append(user)
-        self.refresh_stream()
+    async def refresh_stream(self, listening=[]):
+        await self.close_stream()
+        followers = []
+        for username in listening:
+            user = await user_lookup(username)
+            followers.append(str(user.id))
+            print(f'即將監控 {user.name} 的推文')
+        try:
+            self.thread = stream.filter(follow=followers, threaded=True)
+            for username in listening:
+                await send_live_room_status(username, "started")
+            self.listening = listening
+            print(f'推特監控已啟動')
+        except TweepyException as e:
+            print(f'追蹤推特用戶推文時出現錯誤: {e.message}')
 
-    def remove_listen(self, user: str):
-        self.listening.remove(user)
-        self.refresh_stream()
+    def on_data(self, raw_data):
+        data = json.loads(raw_data.decode('utf-8'))
+        if 'delete' in data:
+            return # skip delete post 
+        print(f'檢測到 {data["user"]["name"]} 有新動態，已成功發佈。')
+        self.redis.publish(f'twitter:{data["user"]["screen_name"]}', json.dumps(data))
 
-    def refresh_stream(self):
-        self.stream.close()
-        thread = threading.Thread(target=self.launch_stream)
-        thread.start()
-
-    def launch_stream(self):
-        for data in api.GetStreamFilter(follow=self.listening):
-            try:
-                print(f'檢測到 {data["user"]["name"]} 有新動態，已成功發佈。')
-                TwitterSpiders.REDIS.publish(f'twitter:{data["user"]["screen_name"]}', json.dumps(data))
-            except TwitterError as e:
-                print(f'追蹤推特用戶推文時出現錯誤: {e.message}')
-            
-
-
-class TwitterSpider:
-
-    REDIS = None
-
-    def __init__(self, user: str, username: str) -> None:
-        self.user = user
-        self.screen = username
-        self.closed = True
-        limit: RateLimit = api.rate_limit
-        print(f'stream limit: {limit.get_limit(api.base_url+"/statuses/filter.json")._asdict}')
-
-
-    def listen(self, stream: Generator[any, None, None]):
-        while not self.closed:
-            try:
-                data = next(stream)
-                print(f'檢測到 {self.screen} 有新推特，已成功發佈。')
-                TwitterSpider.REDIS.publish(f'twitter:{self.screen}', json.dumps(data))
-            except StopIteration:
-                break
-        stream.close()
-
-    async def start(self):
-        stream = api.GetStreamFilter(follow=[self.user])
-        await send_live_room_status(self.screen, "started")
-        self.closed = False
-        self.thread = threading.Thread(target=self.listen, args=(stream, ))
-        self.thread.start()    
-
-    async def close(self):
-        if self.closed:
+    async def close_stream(self):
+        if not self.thread:
             return
-        self.closed = True
-        await send_live_room_status(self.screen, "stopped")
+        stream.disconnect()
+        print(f'等待推特監控關閉...')
+        await stream.wait_until_closed()
+        for latest_listen in self.listening:
+            await send_live_room_status(latest_listen, "stopped")
+        print(f'推特監控已關閉')
+        self.thread = None
+        self.listening = []
 
+user_caches: Dict[str, any] = dict()
 
-user_caches: Dict[str, User] = dict()
-
-async def get_user(screen_name: str):
+async def user_lookup(screen_name: str):
     if screen_name in user_caches:
         return user_caches[screen_name]
-    user = api.GetUser(screen_name=screen_name)
-    user_caches[screen_name] = user
-    return user
-    
-    
+    [data, include, error, meta] = api.get_user(username=screen_name)
+    user_caches[screen_name] = data
+    return data
