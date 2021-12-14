@@ -1,2 +1,4 @@
 tweepy
 redis
+flask[async]
+waitress

@@ -1,9 +1,11 @@
 import asyncio
 import time
 from twitter_api import TwitterSpiders
-from redis_api import initRedis, send_live_room_status
+from redis_api import initRedis
 from redis.exceptions import RedisError
 from typing import Dict
+from multiprocessing import Process
+from rest_api import StartAPIServer
 
 
 VERSION = 'v0.2'
@@ -52,4 +54,5 @@ async def launch_server():
 
 
 if __name__ == '__main__':
+    Process(target=StartAPIServer).start()
     asyncio.run(launch_server())

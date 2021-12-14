@@ -9,6 +9,8 @@ RUN pip install -r requirements.txt
 
 VOLUME /app/config
 
+EXPOSE 8989
+
 CMD [ "main.py" ]
 
 ENTRYPOINT ["python3"]
